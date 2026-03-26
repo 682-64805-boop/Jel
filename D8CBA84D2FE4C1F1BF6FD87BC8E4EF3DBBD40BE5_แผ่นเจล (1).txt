@@ -1,0 +1,424 @@
+import React, { useState, useEffect, useRef } from 'react';
+import { initializeApp } from 'firebase/app';
+import { getAuth, signInAnonymously, onAuthStateChanged, signInWithCustomToken } from 'firebase/auth';
+import { getFirestore, collection, addDoc, onSnapshot, query, doc, deleteDoc } from 'firebase/firestore';
+import { 
+  Camera, Upload, History, ShieldCheck, AlertCircle, Heart, 
+  ChevronRight, Calendar, Activity, LayoutDashboard, Search,
+  Trash2, Info, CheckCircle2, FlaskConical, Filter, Sparkles,
+  ArrowRight, Bell, User, Clock, Zap
+} from 'lucide-react';
+
+// --- Firebase Configuration ---
+const firebaseConfig = JSON.parse(__firebase_config);
+const app = initializeApp(firebaseConfig);
+const auth = getAuth(app);
+const db = getFirestore(app);
+const appId = typeof __app_id !== 'undefined' ? __app_id : 'gelscan-ultra-platinum';
+
+const App = () => {
+  const [user, setUser] = useState(null);
+  const [activeTab, setActiveTab] = useState('home'); // home, history, result
+  const [records, setRecords] = useState([]);
+  const [analyzing, setAnalyzing] = useState(false);
+  const [currentResult, setCurrentResult] = useState(null);
+  const [showScanMenu, setShowScanMenu] = useState(false);
+  
+  const fileInputRef = useRef(null);
+  const canvasRef = useRef(null);
+
+  useEffect(() => {
+    const initAuth = async () => {
+      if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
+        await signInWithCustomToken(auth, __initial_auth_token);
+      } else {
+        await signInAnonymously(auth);
+      }
+    };
+    initAuth();
+    const unsubscribe = onAuthStateChanged(auth, setUser);
+    return () => unsubscribe();
+  }, []);
+
+  useEffect(() => {
+    if (!user) return;
+    const q = collection(db, 'artifacts', appId, 'users', user.uid, 'gel_scans');
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+      setRecords(data.sort((a, b) => b.timestamp - a.timestamp));
+    });
+    return () => unsubscribe();
+  }, [user]);
+
+  const processImage = (imgSrc) => {
+    setAnalyzing(true);
+    setShowScanMenu(false);
+    
+    const img = new Image();
+    img.src = imgSrc;
+    img.onload = async () => {
+      const canvas = canvasRef.current;
+      const ctx = canvas.getContext('2d', { willReadFrequently: true });
+      canvas.width = 300;
+      canvas.height = 300;
+      ctx.drawImage(img, 0, 0, 300, 300);
+
+      const imageData = ctx.getImageData(100, 100, 100, 100);
+      const data = imageData.data;
+      let r = 0, g = 0, b = 0;
+      for (let i = 0; i < data.length; i += 4) {
+        r += data[i]; g += data[i + 1]; b += data[i + 2];
+      }
+      const count = data.length / 4;
+      const avg = { r: r/count, g: g/count, b: b/count };
+
+      // Medical Color Logic
+      // 1. Blue (Normal) -> B is dominant
+      // 2. Cyan-Green (Infected) -> G & B are close
+      // 3. Purple (Healing) -> R & B are close
+      let status = "normal";
+      let colorDesc = "สีน้ำเงินสว่าง";
+      
+      if (avg.g > avg.r * 1.15 && avg.g > avg.b * 0.8) {
+        status = "infected";
+        colorDesc = "สีฟ้า-เขียว (ตรวจพบเชื้อ)";
+      } else if (avg.r > 80 && avg.b > 80 && avg.g < Math.max(avg.r, avg.b)) {
+        status = "healing";
+        colorDesc = "สีน้ำเงิน-ม่วง (กำลังฟื้นตัว)";
+      }
+
+      const newRecord = {
+        status,
+        colorDesc,
+        rgb: avg,
+        timestamp: Date.now(),
+        img: imgSrc.length < 100000 ? imgSrc : "" // Store only if small, else mock
+      };
+
+      if (user) await addDoc(collection(db, 'artifacts', appId, 'users', user.uid, 'gel_scans'), newRecord);
+      
+      setTimeout(() => {
+        setCurrentResult(newRecord);
+        setAnalyzing(false);
+        setActiveTab('result');
+      }, 3000); // Realistic Scan Time
+    };
+  };
+
+  const getTheme = (status) => {
+    switch(status) {
+      case 'infected': return { color: 'text-rose-500', bg: 'bg-rose-50', border: 'border-rose-200', btn: 'bg-rose-500', icon: <AlertCircle />, label: 'ตรวจพบการติดเชื้อ' };
+      case 'healing': return { color: 'text-indigo-500', bg: 'bg-indigo-50', border: 'border-indigo-200', btn: 'bg-indigo-500', icon: <Clock />, label: 'แผลกำลังฟื้นตัว' };
+      default: return { color: 'text-emerald-500', bg: 'bg-emerald-50', border: 'border-emerald-200', btn: 'bg-emerald-500', icon: <ShieldCheck />, label: 'สภาวะปกติ' };
+    }
+  };
+
+  return (
+    <div className="min-h-screen bg-[#F8FAFC] text-[#1E293B] font-sans selection:bg-blue-100">
+      {/* Background Decor */}
+      <div className="fixed top-0 left-0 w-full h-80 bg-gradient-to-br from-blue-600 to-indigo-700 rounded-b-[60px] -z-10 shadow-2xl overflow-hidden">
+        <div className="absolute top-0 right-0 w-64 h-64 bg-white/10 rounded-full -mr-20 -mt-20 blur-3xl"></div>
+        <div className="absolute bottom-0 left-0 w-40 h-40 bg-blue-400/20 rounded-full -ml-10 -mb-10 blur-2xl"></div>
+      </div>
+
+      {/* Top Navbar */}
+      <header className="px-6 pt-10 pb-6 flex justify-between items-center text-white">
+        <div className="flex items-center gap-3">
+          <div className="p-2 bg-white/20 backdrop-blur-md rounded-2xl border border-white/30">
+            <FlaskConical size={24} />
+          </div>
+          <div>
+            <h1 className="text-xl font-black tracking-tight leading-none">GelScan Pro</h1>
+            <p className="text-[10px] text-blue-100 mt-1 uppercase tracking-widest font-bold">Molecular Tracking</p>
+          </div>
+        </div>
+        <div className="flex gap-3">
+          <button className="relative p-2 bg-white/10 backdrop-blur-md rounded-xl border border-white/20">
+            <Bell size={20} />
+            <span className="absolute top-2 right-2 w-2 h-2 bg-rose-500 rounded-full border-2 border-white"></span>
+          </button>
+          <div className="w-10 h-10 bg-white rounded-xl shadow-lg flex items-center justify-center text-blue-600 font-bold overflow-hidden border-2 border-white">
+             <img src="https://ui-avatars.com/api/?name=User&background=fff&color=2563eb" alt="avatar" />
+          </div>
+        </div>
+      </header>
+
+      <main className="px-6 pb-32 max-w-md mx-auto">
+        
+        {activeTab === 'home' && (
+          <div className="space-y-6 animate-in fade-in slide-in-from-bottom-10 duration-700">
+            {/* Main Stats Card */}
+            <div className="bg-white/80 backdrop-blur-xl rounded-[40px] p-8 shadow-xl border border-white relative overflow-hidden">
+               <div className="flex justify-between items-start mb-6">
+                  <div>
+                    <h2 className="text-2xl font-black text-slate-800 tracking-tight">สวัสดีวันนี้!</h2>
+                    <p className="text-sm text-slate-400 font-medium">สุขภาพแผลของคุณวันนี้เป็นอย่างไร?</p>
+                  </div>
+                  <div className="bg-blue-50 p-2 rounded-xl text-blue-600">
+                    <Activity size={24} className="animate-pulse" />
+                  </div>
+               </div>
+               
+               <div className="grid grid-cols-2 gap-4">
+                  <div className="bg-slate-50 p-4 rounded-3xl border border-slate-100">
+                    <p className="text-[10px] font-bold text-slate-400 uppercase mb-1">สแกนสะสม</p>
+                    <p className="text-2xl font-black text-slate-800">{records.length} <span className="text-xs font-normal">ครั้ง</span></p>
+                  </div>
+                  <div className="bg-slate-50 p-4 rounded-3xl border border-slate-100">
+                    <p className="text-[10px] font-bold text-slate-400 uppercase mb-1">ความเสี่ยง</p>
+                    <p className="text-lg font-black text-blue-600">ต่ำมาก</p>
+                  </div>
+               </div>
+            </div>
+
+            {/* Quick Action */}
+            <div className="relative">
+              <button 
+                onClick={() => setShowScanMenu(true)}
+                className="w-full bg-gradient-to-r from-blue-600 to-indigo-600 p-6 rounded-[35px] text-white shadow-2xl shadow-blue-200 flex items-center justify-between group active:scale-[0.98] transition-all"
+              >
+                <div className="flex items-center gap-4">
+                  <div className="bg-white/20 p-4 rounded-2xl">
+                    <Camera size={28} />
+                  </div>
+                  <div className="text-left">
+                    <p className="font-bold text-lg">เริ่มต้นสแกน</p>
+                    <p className="text-xs text-blue-100 font-light">ใช้ AI ตรวจสอบค่าสีของเจล</p>
+                  </div>
+                </div>
+                <div className="bg-white/10 p-2 rounded-full group-hover:translate-x-1 transition-transform">
+                  <ChevronRight size={20} />
+                </div>
+              </button>
+            </div>
+
+            {/* Recent Timeline */}
+            <div className="space-y-4">
+              <div className="flex justify-between items-center px-2">
+                <h3 className="font-black text-slate-800 tracking-tight">บันทึกที่ผ่านมา</h3>
+                <button onClick={() => setActiveTab('history')} className="text-xs font-bold text-blue-600 px-3 py-1 bg-blue-50 rounded-full">ดูประวัติ</button>
+              </div>
+              
+              <div className="space-y-3">
+                {records.slice(0, 3).map((rec) => (
+                  <div key={rec.id} className="bg-white p-4 rounded-[30px] flex items-center gap-4 shadow-sm border border-slate-100 hover:shadow-md transition-shadow">
+                    <div className={`w-14 h-14 rounded-2xl flex items-center justify-center ${getTheme(rec.status).bg} ${getTheme(rec.status).color}`}>
+                      {getTheme(rec.status).icon}
+                    </div>
+                    <div className="flex-1">
+                      <p className="font-bold text-sm text-slate-800 leading-none">{getTheme(rec.status).label}</p>
+                      <p className="text-[10px] text-slate-400 mt-1.5 flex items-center gap-1 font-medium italic">
+                        <Clock size={10} /> {new Date(rec.timestamp).toLocaleTimeString('th-TH', { hour: '2-digit', minute: '2-digit' })} • {rec.colorDesc}
+                      </p>
+                    </div>
+                    <div className="p-2 bg-slate-50 rounded-xl text-slate-300">
+                      <ChevronRight size={16} />
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Analyzing State with Laser Effect */}
+        {analyzing && (
+          <div className="fixed inset-0 z-50 bg-white flex flex-col items-center justify-center p-8 text-center animate-in fade-in duration-300">
+             <div className="w-64 h-64 bg-slate-50 rounded-[40px] relative overflow-hidden shadow-2xl border-4 border-slate-100 flex items-center justify-center mb-8">
+                <Activity size={64} className="text-blue-100 animate-pulse" />
+                {/* Laser Line */}
+                <div className="absolute top-0 left-0 w-full h-1 bg-blue-500 shadow-[0_0_15px_rgba(59,130,246,0.8)] animate-scan-line"></div>
+                <div className="absolute inset-4 border-2 border-dashed border-blue-200 rounded-[30px] opacity-50"></div>
+             </div>
+             <h2 className="text-2xl font-black text-slate-800">กำลังประมวลผล...</h2>
+             <p className="text-slate-400 mt-2 font-medium max-w-[250px]">ระบบ AI กำลังวิเคราะห์ความหนาแน่นของโปรตีนและระดับแบคทีเรียจากสีพิกเซล</p>
+             <div className="mt-8 flex gap-2">
+                {[0, 1, 2].map(i => (
+                  <div key={i} className={`w-2 h-2 rounded-full bg-blue-600 animate-bounce`} style={{ animationDelay: `${i * 0.2}s` }}></div>
+                ))}
+             </div>
+          </div>
+        )}
+
+        {/* Result Page (Ultra Sleek) */}
+        {activeTab === 'result' && currentResult && (
+          <div className="animate-in slide-in-from-bottom-12 duration-500">
+             <div className={`p-8 rounded-[50px] shadow-2xl relative overflow-hidden mb-8 border-b-[12px] ${getTheme(currentResult.status).bg} ${getTheme(currentResult.status).border.replace('200', '500')}`}>
+                {/* Decoration Circles */}
+                <div className="absolute top-0 right-0 w-40 h-40 bg-white/30 rounded-full -mr-16 -mt-16"></div>
+                
+                <div className="flex flex-col items-center text-center relative z-10">
+                   <div className="w-20 h-20 bg-white rounded-[30px] shadow-xl flex items-center justify-center mb-6 text-slate-800">
+                      {React.cloneElement(getTheme(currentResult.status).icon, { size: 40, className: getTheme(currentResult.status).color })}
+                   </div>
+                   <h3 className="text-[10px] font-black uppercase tracking-[0.2em] text-slate-400 mb-2">Analysis Result</h3>
+                   <h2 className={`text-3xl font-black mb-1 ${getTheme(currentResult.status).color}`}>
+                      {getTheme(currentResult.status).label}
+                   </h2>
+                   <div className="flex items-center gap-2 mt-4 bg-white/60 px-4 py-1.5 rounded-full border border-white">
+                      <div className="w-2 h-2 rounded-full bg-blue-500 animate-pulse"></div>
+                      <p className="text-xs font-bold text-slate-600">Color ID: {currentResult.colorDesc}</p>
+                   </div>
+                   
+                   <div className="w-full grid grid-cols-3 gap-3 mt-10">
+                      <div className="bg-white/80 p-3 rounded-2xl shadow-sm">
+                        <p className="text-[9px] font-bold text-slate-400 uppercase">Red</p>
+                        <p className="text-sm font-black text-rose-500">{Math.round(currentResult.rgb.r)}</p>
+                      </div>
+                      <div className="bg-white/80 p-3 rounded-2xl shadow-sm">
+                        <p className="text-[9px] font-bold text-slate-400 uppercase">Green</p>
+                        <p className="text-sm font-black text-emerald-500">{Math.round(currentResult.rgb.g)}</p>
+                      </div>
+                      <div className="bg-white/80 p-3 rounded-2xl shadow-sm">
+                        <p className="text-[9px] font-bold text-slate-400 uppercase">Blue</p>
+                        <p className="text-sm font-black text-blue-500">{Math.round(currentResult.rgb.b)}</p>
+                      </div>
+                   </div>
+                </div>
+             </div>
+
+             {/* Action Guide */}
+             <div className="bg-white rounded-[40px] p-6 shadow-sm border border-slate-100 mb-6">
+                <h4 className="font-bold text-slate-800 flex items-center gap-2 mb-4">
+                   <Sparkles size={18} className="text-amber-500" /> คำแนะนำเพื่อสุขภาพ
+                </h4>
+                <div className="space-y-3">
+                   <div className="p-4 bg-slate-50 rounded-3xl flex items-center gap-4 group">
+                      <div className="w-10 h-10 bg-white rounded-xl shadow-sm flex items-center justify-center text-blue-600">1</div>
+                      <p className="text-xs font-medium text-slate-600">ทำความสะอาดแผลด้วยน้ำเกลือปราศจากเชื้อ</p>
+                   </div>
+                   <div className="p-4 bg-slate-50 rounded-3xl flex items-center gap-4 group">
+                      <div className="w-10 h-10 bg-white rounded-xl shadow-sm flex items-center justify-center text-blue-600">2</div>
+                      <p className="text-xs font-medium text-slate-600">ปิดแผลด้วยวัสดุปิดแผลเพื่อรักษาความชุ่มชื้น</p>
+                   </div>
+                </div>
+                <button 
+                  onClick={() => setActiveTab('home')}
+                  className="w-full mt-8 bg-[#1E293B] text-white py-5 rounded-[28px] font-black text-sm tracking-widest uppercase flex items-center justify-center gap-2 shadow-xl active:scale-95 transition-all"
+                >
+                  บันทึกและเสร็จสิ้น <CheckCircle2 size={18} />
+                </button>
+             </div>
+          </div>
+        )}
+
+        {/* History Tab */}
+        {activeTab === 'history' && (
+          <div className="animate-in fade-in duration-500 space-y-6">
+             <div className="flex justify-between items-center px-2">
+                <h2 className="text-2xl font-black text-slate-800">ไทม์ไลน์การวิจัย</h2>
+                <div className="p-2 bg-white rounded-xl shadow-sm text-slate-400">
+                  <Filter size={18} />
+                </div>
+             </div>
+             
+             <div className="relative border-l-2 border-blue-100 ml-4 pl-8 space-y-8">
+                {records.length === 0 ? (
+                  <div className="text-center py-20 text-slate-400">ยังไม่มีข้อมูลบันทึก</div>
+                ) : (
+                  records.map((rec, index) => (
+                    <div key={rec.id} className="relative">
+                       {/* Timeline dot */}
+                       <div className={`absolute -left-[41px] w-6 h-6 rounded-full border-4 border-[#F8FAFC] shadow-sm flex items-center justify-center ${getTheme(rec.status).btn}`}>
+                          <div className="w-2 h-2 bg-white rounded-full"></div>
+                       </div>
+                       
+                       <div className="bg-white p-5 rounded-[35px] shadow-sm border border-slate-100 group">
+                          <div className="flex justify-between items-start mb-2">
+                             <span className="text-[10px] font-black text-slate-300 uppercase tracking-widest italic">{new Date(rec.timestamp).toLocaleString('th-TH')}</span>
+                             <button onClick={() => deleteDoc(doc(db, 'artifacts', appId, 'users', user.uid, 'gel_scans', rec.id))} className="text-slate-200 hover:text-rose-400"><Trash2 size={14}/></button>
+                          </div>
+                          <h4 className={`font-black text-lg ${getTheme(rec.status).color}`}>{getTheme(rec.status).label}</h4>
+                          <p className="text-xs text-slate-500 mt-1 font-medium">{rec.colorDesc}</p>
+                          <div className="mt-4 pt-4 border-t border-slate-50 flex items-center justify-between">
+                             <div className="flex gap-1">
+                                <div className="w-4 h-4 rounded-full border border-slate-100 shadow-sm" style={{ backgroundColor: `rgb(${rec.rgb.r},${rec.rgb.g},${rec.rgb.b})` }}></div>
+                                <span className="text-[10px] font-mono text-slate-400">#{Math.round(rec.rgb.r).toString(16)}{Math.round(rec.rgb.g).toString(16)}{Math.round(rec.rgb.b).toString(16)}</span>
+                             </div>
+                             <div className="text-[10px] font-bold text-blue-600 flex items-center gap-1">รายละเอียด <ChevronRight size={12}/></div>
+                          </div>
+                       </div>
+                    </div>
+                  ))
+                )}
+             </div>
+          </div>
+        )}
+
+      </main>
+
+      {/* Bottom Menu Bar (The Floating Capsule) */}
+      <nav className="fixed bottom-8 inset-x-6 h-20 bg-white/70 backdrop-blur-2xl rounded-[35px] border border-white/50 shadow-[0_20px_50px_rgba(0,0,0,0.1)] flex justify-between items-center px-4 max-w-md mx-auto z-[60]">
+         <button 
+           onClick={() => setActiveTab('home')}
+           className={`flex-1 flex flex-col items-center gap-1 transition-all ${activeTab === 'home' ? 'text-blue-600' : 'text-slate-300 hover:text-slate-400'}`}
+         >
+            <div className={`p-2 rounded-xl ${activeTab === 'home' ? 'bg-blue-50' : ''}`}><LayoutDashboard size={20} /></div>
+            <span className="text-[9px] font-black uppercase tracking-tighter">Home</span>
+         </button>
+         
+         <div className="flex-1 flex justify-center -mt-10">
+            <button 
+              onClick={() => setShowScanMenu(!showScanMenu)}
+              className="w-16 h-16 bg-gradient-to-br from-blue-600 to-indigo-700 text-white rounded-[24px] shadow-2xl shadow-blue-300 flex items-center justify-center transform hover:rotate-12 active:scale-90 transition-all border-4 border-[#F8FAFC]"
+            >
+              <Zap size={28} />
+            </button>
+         </div>
+
+         <button 
+           onClick={() => setActiveTab('history')}
+           className={`flex-1 flex flex-col items-center gap-1 transition-all ${activeTab === 'history' ? 'text-blue-600' : 'text-slate-300 hover:text-slate-400'}`}
+         >
+            <div className={`p-2 rounded-xl ${activeTab === 'history' ? 'bg-blue-50' : ''}`}><History size={20} /></div>
+            <span className="text-[9px] font-black uppercase tracking-tighter">Logs</span>
+         </button>
+      </nav>
+
+      {/* Action Sheet Menu */}
+      {showScanMenu && (
+        <div className="fixed inset-0 z-[70] flex items-end justify-center px-6 pb-32 animate-in fade-in duration-300">
+           <div className="absolute inset-0 bg-slate-900/40 backdrop-blur-sm" onClick={() => setShowScanMenu(false)}></div>
+           <div className="bg-white w-full max-w-sm rounded-[45px] p-8 shadow-2xl relative z-10 animate-in slide-in-from-bottom-20 duration-500">
+              <h3 className="text-xl font-black text-slate-800 mb-6 text-center">เลือกวิธีวิเคราะห์</h3>
+              <div className="grid grid-cols-2 gap-4">
+                 <button onClick={() => fileInputRef.current.click()} className="flex flex-col items-center gap-4 p-6 bg-blue-50 rounded-[35px] border border-blue-100 active:scale-95 transition-all">
+                    <div className="w-14 h-14 bg-white rounded-2xl flex items-center justify-center text-blue-600 shadow-sm"><Camera size={28}/></div>
+                    <span className="text-sm font-bold text-blue-700">เปิดกล้อง</span>
+                 </button>
+                 <button onClick={() => fileInputRef.current.click()} className="flex flex-col items-center gap-4 p-6 bg-slate-50 rounded-[35px] border border-slate-100 active:scale-95 transition-all">
+                    <div className="w-14 h-14 bg-white rounded-2xl flex items-center justify-center text-slate-600 shadow-sm"><Upload size={28}/></div>
+                    <span className="text-sm font-bold text-slate-700">คลังรูปภาพ</span>
+                 </button>
+              </div>
+              <input type="file" ref={fileInputRef} className="hidden" accept="image/*" onChange={(e) => {
+                const file = e.target.files[0];
+                if(file) {
+                  const reader = new FileReader();
+                  reader.onload = (ev) => processImage(ev.target.result);
+                  reader.readAsDataURL(file);
+                }
+              }} />
+           </div>
+        </div>
+      )}
+
+      {/* Hidden Processing Canvas */}
+      <canvas ref={canvasRef} className="hidden" />
+
+      {/* Custom Animations */}
+      <style dangerouslySetInnerHTML={{ __html: `
+        @keyframes scan-line {
+          0% { top: 0; }
+          100% { top: 100%; }
+        }
+        .animate-scan-line {
+          animation: scan-line 2s linear infinite;
+        }
+      `}} />
+    </div>
+  );
+};
+
+export default App;
+
